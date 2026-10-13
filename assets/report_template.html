@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{TITLE}}</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    h1 { color: #00629b; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin: 24px 0; }
+    .stat-card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+    .stat-card .num { font-size: 32px; font-weight: 700; color: #00629b; }
+    .stat-card .label { font-size: 13px; color: #666; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    th { background: #00629b; color: #fff; padding: 12px 10px; text-align: left; font-size: 13px; }
+    td { padding: 10px; border-bottom: 1px solid #eee; font-size: 13px; }
+    tr:hover { background: #f0f7ff; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>{{HEADING}}</h1>
+    <div class="stats">{{STATS}}</div>
+    <table>
+        <thead><tr>{{HEADERS}}</tr></thead>
+        <tbody>{{ROWS}}</tbody>
+    </table>
+</div>
+</body>
+</html>
