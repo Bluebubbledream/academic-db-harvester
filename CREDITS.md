@@ -39,7 +39,7 @@ No third-party source code is copied into this repository.
 ## 4. Upstream work this skill grew out of
 
 The project is a rewrite and generalization of an earlier, IEEE-only skill that
-lived in the author's own local skill library: **`ieee-xplore-harvester`**,
+ is **`ieee-xplore-harvester`**,
 which consisted of a single `SKILL.md` describing an IEEE Xplore-only tool.
 
 ### 4.1 Inherited from `ieee-xplore-harvester`
