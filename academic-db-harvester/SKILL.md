@@ -38,6 +38,15 @@ added without touching the harvester pipeline.
 | `ieee` (default) | IEEE Xplore | ieeexplore.ieee.org | Yes | Session login required |
 | `sciencedirect` | Elsevier ScienceDirect | www.sciencedirect.com | Yes | PDF endpoint is bot-protected; downloaded via browser-assisted fallback (see below) |
 | `wos` | Web of Science (Clarivate) | webofscience.com / webofscience.clarivate.cn | No (citation index) | Redirects to the `.cn` mirror in mainland China; metadata/abstract/DOI only |
+| `openalex` | OpenAlex | api.openalex.org | When open-access | **HTTP API — no browser, no login.** Indexes 250M+ works across all publishers; exposes citations and OA PDF links |
+| `arxiv` | arXiv | export.arxiv.org | Yes (every record) | **HTTP API — no browser, no login.** Preprints with free full-text PDFs; no citation counts |
+
+Two transports sit behind the same `--source` flag: browser-backed sources
+(`ieee`, `sciencedirect`, `wos`) need Edge + CDP + your login; API sources
+(`openalex`, `arxiv`) are plain HTTPS and start immediately. For broad coverage
+run `openalex` first — it spans every publisher, including ones with no
+dedicated adapter here — then narrow with a publisher source. For preprints with
+guaranteed free full text, run `arxiv`.
 
 ## Quick Start
 
@@ -67,8 +76,14 @@ added without touching the harvester pipeline.
 ### Run
 
 ```bash
-# IEEE Xplore (default source, backward compatible)
-python scripts/harvester.py --keyword "solid electrolyte interphase" --years 2020-2025 --count 200 --download-pdf
+# OpenAlex - no browser, no login, broad coverage (start here)
+python scripts/harvester.py --source openalex --keyword "cyber range" --years 2020-2026 --count 100 --download-pdf
+
+# arXiv - preprints, every record has a free PDF
+python scripts/harvester.py --source arxiv --keyword "cyber range" --years 2022-2026 --count 30 --download-pdf
+
+# IEEE Xplore (browser + login, publisher full text)
+python scripts/harvester.py --source ieee --keyword "solid electrolyte interphase" --years 2020-2025 --count 200 --download-pdf
 
 # ScienceDirect (Elsevier full text + PDF)
 python scripts/harvester.py --source sciencedirect --keyword "cyber range" --years 2024-2026 --count 50 --download-pdf
@@ -76,6 +91,9 @@ python scripts/harvester.py --source sciencedirect --keyword "cyber range" --yea
 # Web of Science (metadata/citations only)
 python scripts/harvester.py --source wos --keyword "cyber range" --years 2024-2026 --count 100
 ```
+
+For OpenAlex set `OPENALEX_MAILTO=you@example.com` to join the polite pool —
+recommended, and required for reliable throughput at higher volumes.
 
 By default output goes to `~/Desktop/论文/{timestamp}_{keyword}[_{source}]/`
 (override the root with `--output`).
@@ -207,6 +225,23 @@ Output layout, rooted at `~/Desktop/论文/` (or `--output`):
   No PDFs (index database); use the DOI to fetch full text elsewhere.
 - **IEEE Xplore**: the default source; unchanged behaviour of the search,
   pagination and metadata extraction steps.
+- **OpenAlex**: API-backed but spans every publisher, so it returns records that
+  no publisher-site adapter here can see. Each record carries DOI, venue,
+  citation count, keywords and — where the work is open access — a direct PDF
+  URL. With `--sort cited` ranking is by citation count, so off-topic but heavily
+  cited papers can surface; keep the default `relevance` for discovery. Year
+  filtering is server-side (`from_publication_date` / `to_publication_date`),
+  and abstracts arrive as an inverted index that the adapter rebuilds into text.
+- **arXiv**: every record is open access with a direct PDF, which makes this the
+  cheapest source when full text matters more than citations. Fields come from
+  the Atom API: title, authors, abstract, subjects, and the optional
+  `arxiv:doi` / `arxiv:journal_ref` (the published venue, when the preprint has
+  since appeared elsewhere). arXiv exposes no citation counts, so they are
+  recorded as `0` and priority scoring leans on recency plus open access.
+  **Throttling matters:** arXiv asks automated clients to stay at ≥3 s between
+  requests; the adapter enforces this and exposes `ARXIV_MIN_INTERVAL` (seconds)
+  if a different cadence is needed. Bulk paging through large result sets is
+  discouraged by the API terms — narrow the query or keep `--count` moderate.
 
 ## Error Handling
 
@@ -219,18 +254,35 @@ Output layout, rooted at `~/Desktop/论文/` (or `--output`):
 - **ScienceDirect 403/challenge on PDF**: handled automatically through the
   browser-assisted fallback; if it still fails, the paper stays in `pending.csv`.
 - **CAPTCHA**: Pause and alert user to solve manually.
+- **API source rate-limited** (HTTP 429): set the source's polite-pool variable —
+  `OPENALEX_MAILTO=you@example.com` — and retry; `_http_get()` already backs off
+  and retries three times. On arXiv a 429 usually means requests were fired faster
+  than the ≥3 s cadence; the adapter already spaces them, so if you see it, raise
+  `ARXIV_MIN_INTERVAL`.
 - **Network timeout**: Auto-retry up to 3 times with exponential backoff.
 - **PDF validation failure**: Re-download once, then mark as failed.
 
 ## Extending
 
 Adding a database means adding one adapter under `scripts/sites/` and one entry in
-`SITE_REGISTRY`; the pipeline itself never changes. Subclass `BaseSiteAdapter` and
+`SITE_REGISTRY`; the pipeline itself never changes. Pick the transport first:
+
+**Browser-backed** (publisher site, needs login): subclass `BaseSiteAdapter` and
 implement `build_search_url`, `navigate_to_search`, `extract_result_list`,
 `go_next_page`, `open_detail`, `extract_detail`, `check_login_status`
 (`extract_bibtex` / `extract_ris` are optional). Declare `name`, `display_name`,
 `hosts` (used to find the right tab), `has_pdf` and `login_required`. The base
 class already provides `_wait_for_any`, `_eval`, `get_cookies` and `_sleep`.
+
+**API-backed** (public HTTP, no login): subclass `ApiSiteAdapter` and implement a
+single method — `fetch_page(keyword, years, sort, page) -> list[dict]` — plus the
+class attributes `name`, `display_name`, `has_pdf` and `page_size`. The base class
+turns that into the full interface (paging, detail, cookies, PDF picking) and
+supplies `_http_get()` with retry/backoff plus `parse_years()`. Reference
+implementation: `sites/openalex.py` (~120 lines for a complete source).
+
+Either way, register it in `SITE_REGISTRY` and it becomes available as
+`--source <name>`.
 
 ## References
 

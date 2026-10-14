@@ -6,9 +6,18 @@ First public release.
 
 ### Added
 - Multi-source harvesting: **IEEE Xplore**, **ScienceDirect (Elsevier)**,
-  **Web of Science (Clarivate)**, selected with `--source`.
-- Adapter architecture (`scripts/sites/`): the pipeline is source-agnostic, a new
-  database is one file plus one registry entry.
+  **Web of Science (Clarivate)**, **OpenAlex**, **arXiv**, selected with `--source`.
+- Two transports behind one flag: browser-backed sources ride Edge + CDP,
+  API sources are plain HTTPS with no browser and no login.
+- **OpenAlex adapter** (verified live 2026-10-14): cross-publisher coverage of
+  250M+ works, with DOI, venue, citation counts, keywords, rebuilt abstracts and
+  direct open-access PDF links. Honours `OPENALEX_MAILTO` for the polite pool.
+- **arXiv adapter** (verified live 2026-10-14): preprints via the public Atom API
+  with free full text on every record (4/4 PDFs downloaded in the test run).
+  Enforces arXiv's ≥3 s request spacing; `ARXIV_MIN_INTERVAL` overrides it.
+- Adapter architecture (`scripts/sites/`): the pipeline is source- *and*
+  transport-agnostic, a new database is one file plus one registry entry
+  (`ApiSiteAdapter` for HTTP sources, `BaseSiteAdapter` for browser sources).
 - Edge CDP launcher that works around Chromium ≥136 ignoring
   `--remote-debugging-port` on the default profile (dedicated profile + one-time
   login-state copy).
@@ -32,5 +41,10 @@ First public release.
 
 ### Known limitations
 - Web of Science is an index database: metadata only, no hosted PDFs.
-- Search-engine-specific sorting flags do not apply to every source.
+- ACM DL and DBLP are not wired up yet (403 without a browser session / bot
+  challenge) — see `CREDITS.md` §5 for the evidence; OpenAlex plus arXiv cover a
+  large share of what those would return.
+- Search-engine-specific sorting flags do not apply to every source; with
+  `--sort cited` on an aggregate source, off-topic but highly cited papers can
+  surface.
 - Publisher front-ends change; extraction may need selector updates.

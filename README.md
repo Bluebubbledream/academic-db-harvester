@@ -30,8 +30,8 @@ through the pipeline.
 | OS | Windows (bundled launcher is PowerShell) |
 | Browser | Edge / Chromium 136+ (CDP on the default profile is silently ignored by Chromium ≥136) |
 | Python | 3.9+ |
-| Deps | `playwright`, `websocket-client` (`pip install -r academic-db-harvester/scripts/requirements.txt`) |
-| Playwright browser | `playwright install chromium` |
+| Deps | `playwright`, `websocket-client` (`pip install -r academic-db-harvester/scripts/requirements.txt`) — **only needed for the browser-backed sources** |
+| Playwright browser | `playwright install chromium` (browser-backed sources only) |
 | Access | Your own IEEE / Elsevier / Clarivate login and entitlements |
 
 ## Install
@@ -56,7 +56,18 @@ Discoverable skill locations (OpenCode docs): `.opencode/skills/<name>/`,
 `~/.config/opencode/skills/<name>/`, `.claude/skills/<name>/`,
 `.agents/skills/<name>/` and their user-global equivalents.
 
-## Usage
+| Platform | Role | Transport | PDF |
+|---|---|---|---|
+| IEEE Xplore | Search, metadata, citations, full text | Edge + CDP + login | yes |
+| ScienceDirect (Elsevier) | Search, metadata, full text | Edge + CDP + login | yes |
+| Web of Science (Clarivate) | Search, metadata, citations | Edge + CDP + login | no (index) |
+| **OpenAlex** | Cross-publisher graph: DOI, venue, citations, keywords, OA links | **HTTPS API — no browser** | when open-access |
+| **arXiv** | Preprints: title, authors, abstract, subjects, published venue | **HTTPS API — no browser** | yes, every record |
+
+OpenAlex covers 250M+ works across all publishers, including ones with no
+dedicated adapter here — start there for broad coverage, then narrow with a
+publisher source. arXiv is the cheapest source when you need full text rather
+than citations.
 
 With the skill installed you can just ask, e.g. *"harvest 50 papers on
 `solid electrolyte interphase` from IEEE Xplore, 2020-2025, download the PDFs"*.
@@ -68,7 +79,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File academic-db-harvester/script
 
 # 2. open and sign in to the target site inside that Edge window (first run only)
 
-# 3. harvest
+# 3. harvest — OpenAlex and arXiv need no browser at all
+python academic-db-harvester/scripts/harvester.py --source openalex \
+       --keyword "cyber range" --years 2020-2026 --count 100 --download-pdf
+
+python academic-db-harvester/scripts/harvester.py --source arxiv \
+       --keyword "cyber range" --years 2022-2026 --count 30 --download-pdf
+
+# 4. or a publisher source (browser + your login)
 python academic-db-harvester/scripts/harvester.py --source ieee \
        --keyword "solid electrolyte interphase" --years 2020-2025 --count 200 --download-pdf
 python academic-db-harvester/scripts/harvester.py --source sciencedirect \
@@ -79,7 +97,7 @@ python academic-db-harvester/scripts/harvester.py --source wos \
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
-| `--source` | str | `ieee` | `ieee` / `sciencedirect` / `wos` |
+| `--source` | str | `ieee` | `ieee` / `sciencedirect` / `wos` / `openalex` / `arxiv` |
 | `--keyword` | str | required | Search terms (quote multi-word phrases) |
 | `--years` | str | `2020-2025` | Year range |
 | `--count` | int | `50` | Max papers |
@@ -105,21 +123,31 @@ python academic-db-harvester/scripts/harvester.py --source wos \
 
 ## Extensibility
 
-The pipeline (`harvester.py`) is source-agnostic. A new database is one file:
+The pipeline (`harvester.py`) is source-agnostic and transport-agnostic. Pick one
+of two base classes; a new database is one file plus one registry entry.
 
-1. Add `scripts/sites/<name>.py` subclassing `BaseSiteAdapter`
-   (`scripts/sites/base.py`).
-2. Implement `build_search_url`, `navigate_to_search`, `extract_result_list`,
-   `go_next_page`, `open_detail`, `extract_detail`, `check_login_status`;
-   `extract_bibtex` / `extract_ris` are optional.
-3. Declare the class attributes `name`, `display_name`, `hosts` (URL prefixes
-   used to locate the right tab), `has_pdf`, `login_required`.
-4. Register it in `scripts/sites/__init__.py` → `SITE_REGISTRY`.
+**API-backed (recommended first)** — subclass `ApiSiteAdapter`
+(`scripts/sites/base.py`) and implement a single method:
 
-Reusable helpers already in the base class: `_wait_for_any`, `_eval`,
-`get_cookies`, `_sleep`. Registration is one dict entry; a new source becomes
-available as `--source <name>` with no changes to download, storage or reporting
-code. See `SKILL.md` → *Extending* for the same contract from the agent's side.
+```python
+fetch_page(keyword, years, sort, page) -> list[dict]
+```
+
+plus `name`, `display_name`, `has_pdf`, `page_size`. The base class supplies
+paging, detail handling, cookie-free PDF picking, `_http_get()` with
+retry/backoff and `parse_years()`. `scripts/sites/openalex.py` is ~120 lines and
+works as a complete reference.
+
+**Browser-backed** — subclass `BaseSiteAdapter`, implement `build_search_url`,
+`navigate_to_search`, `extract_result_list`, `go_next_page`, `open_detail`,
+`extract_detail`, `check_login_status` (`extract_bibtex` / `extract_ris`
+optional), and declare `name`, `display_name`, `hosts` (URL prefixes used to find
+the right tab), `has_pdf`, `login_required`. Reusable helpers `_wait_for_any`,
+`_eval`, `get_cookies` and `_sleep` come from the base class.
+
+Finally register it in `scripts/sites/__init__.py` → `SITE_REGISTRY`; the source is
+then available as `--source <name>` with no changes to download, storage or
+reporting code.
 
 ## Troubleshooting
 
@@ -129,6 +157,7 @@ code. See `SKILL.md` → *Extending* for the same contract from the agent's side
 | "not logged in" | Sign in to the site inside the debug Edge window (first run copies cookies from your main profile). |
 | PDF download failed | Paywall / no entitlement, or the ScienceDirect JS challenge was not solved → recorded in `pending.csv`. |
 | CAPTCHA | Solve it manually in the Edge window; the run continues afterwards. |
+| API source returns HTTP 429 | OpenAlex: set `OPENALEX_MAILTO=you@example.com`. arXiv: keep the ≥3 s request spacing the adapter enforces, or raise `ARXIV_MIN_INTERVAL`. Retries with backoff are built in. |
 | Duplicates | De-duplicated by DOI / ARN / PII / WOS uid / URL / title. |
 
 ## Responsible use

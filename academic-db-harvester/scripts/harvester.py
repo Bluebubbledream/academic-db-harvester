@@ -39,8 +39,9 @@ def classify_priority(paper: dict, idx: int) -> str:
 
     score = 0
 
-    # Open Access papers are preferred
-    if "open" in access:
+    # Open Access papers are preferred. Publishers label this differently:
+    # IEEE/Elsevier say "Open Access", OpenAlex says gold/green/hybrid/diamond.
+    if "open" in access or any(t in access for t in ("gold", "green", "hybrid", "diamond")):
         score += 3
 
     # Newer papers preferred
@@ -82,15 +83,19 @@ Examples:
   python harvester.py --source wos --keyword "cyber range" --years 2024-2026 --count 100
 
 Sources:
-  ieee           IEEE Xplore (full text + PDF)
-  sciencedirect  Elsevier ScienceDirect (full text + PDF)
-  wos            Web of Science (metadata/citations only, no PDF)
+  ieee           IEEE Xplore (browser + login, full text + PDF)
+  sciencedirect  Elsevier ScienceDirect (browser + login, full text + PDF)
+  wos            Web of Science (browser + login, metadata/citations only)
+  openalex       OpenAlex open graph (HTTP API, no browser; OA PDFs where available)
 
 Prerequisites:
+  Browser-backed sources (ieee / sciencedirect / wos):
   1. Start Edge with CDP via the bundled launcher:
        powershell -ExecutionPolicy Bypass -File scripts/start_edge_cdp.ps1
   2. Open and sign in to the target site in that Edge window (first run only)
   3. pip install playwright && playwright install chromium
+
+  API sources (openalex): nothing to install or sign in to.
         """,
     )
     parser.add_argument("--source", type=str, default="ieee", choices=list_sources(),
@@ -118,25 +123,29 @@ Prerequisites:
     adapter_cls = get_adapter(args.source)
     adapter_name = getattr(adapter_cls, "display_name", args.source)
     login_required = getattr(adapter_cls, "login_required", True)
+    needs_browser = getattr(adapter_cls, "requires_browser", True)
     logger.info("=" * 60)
     logger.info("Multi-source Academic Harvester")
     logger.info("Source: %s (%s)", adapter_name, args.source)
+    logger.info("Transport: %s", "Edge CDP (browser)" if needs_browser else "HTTPS API")
     logger.info("=" * 60)
 
-    browser = detect_browser(args.cdp_port)
-    if browser is None:
-        logger.error(
-            "Cannot connect to Edge. Start the debug browser with:\n"
-            "  powershell -ExecutionPolicy Bypass -File scripts/start_edge_cdp.ps1\n"
-            "  (or manually: msedge.exe --remote-debugging-port=%d "
-            "--user-data-dir=\"%%USERPROFILE%%\\edge-cdp\\profile\")", args.cdp_port
-        )
-        sys.exit(1)
+    browser_ws_url = None
+    if needs_browser:
+        if detect_browser(args.cdp_port) is None:
+            logger.error(
+                "Cannot connect to Edge. Start the debug browser with:\n"
+                "  powershell -ExecutionPolicy Bypass -File scripts/start_edge_cdp.ps1\n"
+                "  (or manually: msedge.exe --remote-debugging-port=%d "
+                "--remote-allow-origins=* "
+                "--user-data-dir=\"%%USERPROFILE%%\\edge-cdp\\profile\")", args.cdp_port
+            )
+            sys.exit(1)
 
-    browser_ws_url = get_browser_ws_url(args.cdp_port)
-    if not browser_ws_url:
-        logger.error("Could not get browser WebSocket URL.")
-        sys.exit(1)
+        browser_ws_url = get_browser_ws_url(args.cdp_port)
+        if not browser_ws_url:
+            logger.error("Could not get browser WebSocket URL.")
+            sys.exit(1)
 
     # ── Step 2: Create output directory ──
     dir_keyword = args.keyword if args.source == "ieee" else f"{args.keyword}_{args.source}"
@@ -152,35 +161,48 @@ Prerequisites:
 
     output = OutputManager(output_dir, dir_keyword, args.years, source=args.source)
 
-    # ── Step 3: Connect via Playwright CDP ──
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        logger.error(
-            "Playwright is not installed. Run: pip install playwright && playwright install chromium"
-        )
-        sys.exit(1)
-
-    with sync_playwright() as pw:
-        logger.info("Connecting to Edge via CDP...")
-        browser_obj = pw.chromium.connect_over_cdp(browser_ws_url)
-        context = browser_obj.contexts[0]
-
-        # Find an existing tab of the target site among open tabs
-        page = None
-        for p in context.pages:
-            if any(p.url.startswith(h) for h in adapter_cls.hosts):
-                page = p
-                logger.info("Using existing %s tab: %s", adapter_name, p.url[:90])
-                break
-        if page is None:
+    # ── Step 3: Connect to the source ──
+    # Browser-backed sources ride on Playwright CDP; API sources need neither
+    # Playwright nor a debug browser, so the whole session is skipped for them.
+    pw_cm = None
+    if needs_browser:
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
             logger.error(
-                "No %s tab found among open tabs. Open %s in the debug browser and sign in first.",
-                adapter_name, adapter_cls.hosts[0],
+                "Playwright is not installed. Run: pip install playwright && playwright install chromium"
             )
             sys.exit(1)
+        pw_cm = sync_playwright()
+    else:
+        from contextlib import nullcontext
+        pw_cm = nullcontext(None)
 
-        auto = adapter_cls(page, browser_ws_url)
+    with pw_cm as pw:
+        context = None
+        if needs_browser:
+            logger.info("Connecting to Edge via CDP...")
+            browser_obj = pw.chromium.connect_over_cdp(browser_ws_url)
+            context = browser_obj.contexts[0]
+
+            # Find an existing tab of the target site among open tabs
+            page = None
+            for p in context.pages:
+                if any(p.url.startswith(h) for h in adapter_cls.hosts):
+                    page = p
+                    logger.info("Using existing %s tab: %s", adapter_name, p.url[:90])
+                    break
+            if page is None:
+                logger.error(
+                    "No %s tab found among open tabs. Open %s in the debug browser and sign in first.",
+                    adapter_name, adapter_cls.hosts[0],
+                )
+                sys.exit(1)
+
+            auto = adapter_cls(page, browser_ws_url)
+        else:
+            auto = adapter_cls(None, None)
+            logger.info("Using HTTP API transport (no browser, no login required)")
 
         # ── Step 4: Verify login (hard check only when the source requires it) ──
         try:

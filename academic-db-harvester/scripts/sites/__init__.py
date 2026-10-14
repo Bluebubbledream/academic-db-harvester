@@ -1,4 +1,12 @@
-"""Site adapter registry for multi-source academic harvesting."""
+"""Site adapter registry for multi-source academic harvesting.
+
+Two families live here:
+  * browser-backed adapters  (ieee, sciencedirect, wos) - need Edge + CDP + login
+  * API adapters             (openalex)                 - plain HTTPS, no browser
+
+`requires_browser` on the adapter class decides which path `harvester.py` takes,
+so adding a source never means touching the pipeline.
+"""
 
 import importlib
 
@@ -6,12 +14,22 @@ SITE_REGISTRY = {
     "ieee": ("sites.ieee", "IEEESite"),
     "sciencedirect": ("sites.sciencedirect", "ScienceDirectSite"),
     "wos": ("sites.wos", "WOSSite"),
+    "openalex": ("sites.openalex", "OpenAlexSite"),
+    "arxiv": ("sites.arxiv", "ArxivSite"),
 }
 
 
 def list_sources() -> list[str]:
     """Return available source names."""
     return list(SITE_REGISTRY.keys())
+
+
+def needs_browser(name: str) -> bool:
+    """True when the source needs Edge/CDP; False for pure API sources."""
+    key = (name or "").strip().lower()
+    if key not in SITE_REGISTRY:
+        return True
+    return bool(getattr(get_adapter(key), "requires_browser", True))
 
 
 def get_adapter(name: str):

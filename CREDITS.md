@@ -22,6 +22,8 @@ vendor or project-maintainer pages.
 | ScienceDirect (Elsevier) | https://www.sciencedirect.com | Search, metadata, PDF full text |
 | Web of Science (Clarivate) | https://www.webofscience.com | Search, metadata, citations (index database) |
 | Web of Science China mirror (Clarivate) | https://webofscience.clarivate.cn | Same service, automatically used from mainland China |
+| OpenAlex | https://openalex.org · docs https://docs.openalex.org | Cross-publisher bibliographic graph (public API) |
+| arXiv | https://arxiv.org · API guide https://info.arxiv.org/help/api/user-manual.html | Open preprint server (public Atom API, free full text) |
 
 This project contains **no** publisher code, markup or PDFs. It automates the
 browser session you already have; access control remains with the publishers.
@@ -39,13 +41,24 @@ No third-party source code is copied into this repository.
 ## 4. Upstream work this skill grew out of
 
 The project is a rewrite and generalization of an earlier, IEEE-only skill that
- is **`ieee-xplore-harvester`**,
+lived in the author's own local skill library: **`ieee-xplore-harvester`**,
 which consisted of a single `SKILL.md` describing an IEEE Xplore-only tool.
 
 ### 4.1 Inherited from `ieee-xplore-harvester`
 
-Measured against that document, **59 of its 110 content lines are carried over
-verbatim** and roughly a dozen more are reworded (75–99 % similar). Concretely:
+Measured line by line against that document, the reuse is concentrated in
+**structure and inventories, not in prose**:
+
+- 59 of its 110 content lines appear verbatim — but 33 of those are structural
+  (section headings, code fences, table headers and separators) and 18 are file
+  names from the output layout. Only **6 are identical sentences**.
+- Of the 48 sentence-like lines in the predecessor: 16 verbatim, 20 reworded at
+  ≥70 % similarity (mostly table rows extended with a few words), 9 lightly
+  modified (50–70 %), 3 rewritten.
+- In character terms 83 % of the predecessor's text is literally reused, but
+  that figure is dominated by the 18-line output-layout block.
+
+In substance, what was carried over:
 
 - the document skeleton — Overview / Quick Start / Prerequisites / Run /
   Workflow / Output Structure / Scripts Reference / Key Parameters /
@@ -61,6 +74,9 @@ verbatim** and roughly a dozen more are reworded (75–99 % similar). Concretely
   impact-factor hook;
 - the CDP detection description (`http://127.0.0.1:9222/json/list`, login state
   checked by DOM inspection) and the dependency install commands.
+
+The explanatory prose was largely rewritten; this repository is an incremental
+rewrite of its predecessor, not a clean-room implementation of it.
 
 ### 4.2 Changed in this rewrite
 
@@ -105,5 +121,21 @@ author and license in this section before publishing — the MIT license in
   ScienceDirect (institutional session) and `webofscience.clarivate.cn`.
   Publisher front-ends change; when extraction degrades, re-verify the selectors
   listed in `references/cdp_reference.md`.
+- The OpenAlex adapter was verified live on **2026-10-14** against
+  `api.openalex.org` (`/works?search=…`, year filter, four sort modes, inverted
+  abstract reconstruction, OA PDF links, PDF download of a 1.1 MB file verified by
+  `%PDF-` header).
+- The arXiv adapter was verified live on **2026-10-14** against
+  `export.arxiv.org/api/query`: four records retrieved, **4/4 PDFs downloaded**
+  (1.0–6.7 MB, all `%PDF-`-validated). An earlier note in this file reported arXiv
+  as unreachable with HTTP 429; that was a rate-limit triggered by back-to-back
+  probing, not a block. arXiv asks automated clients to stay ≥3 s apart, which
+  `ApiSiteAdapter` subclasses now enforce (`ARXIV_MIN_INTERVAL`).
+- Sources evaluated during the same session and **deliberately not included**,
+  with the reason recorded so they are not re-trialled blindly:
+  `dblp.org` → bot-challenge interstitial; `dl.acm.org` → HTTP 403 without a
+  browser session (would need a browser-backed adapter); Crossref discovery →
+  returns component DOIs (`type: component`, e.g. "Figure 1: …") unless heavily
+  filtered, so it is better suited to DOI enrichment than to discovery.
 - Each adapter records its verification date in its module docstring, so a
   failure can be traced to a dated check instead of guesswork.

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Harvested output (local library)
+论文/
+*.log
+pdfs/
+metadata/
+citations/
+abstracts/
+reports/
+urls.csv
+pending.csv
+config.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Never commit credentials or sessions
+*.env
+cookies*.json
+*-profile/
