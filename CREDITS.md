@@ -115,6 +115,24 @@ defined by `scripts/sites/base.py`.
 author and license in this section before publishing — the MIT license in
 `LICENSE` covers only what was written for this project.*
 
+### 4.5 Modules added by the multi-round revision (2026-10-21 → 2026-10-22)
+
+The multi-round retrieval loop added five modules. They were written for this
+project and contain no third-party code, but two of them implement published
+methods and should be cited as such:
+
+| Module | What it does | Method / API it follows |
+|---|---|---|
+| `scripts/query_planner.py` | seed-query decomposition, co-word / pseudo-relevance-feedback adjacency mining, citation-seed selection | pseudo-relevance feedback (Rocchio). PRF over free text returns noise, so the term set is constrained to controlled vocabulary (author keywords, IEEE terms, Keywords Plus) — that restriction is the reason for the vocabulary weights in `paper_term_profile()` |
+| `scripts/oa_graph.py` | OpenAlex subject taxonomy, backward and forward citation expansion | the OpenAlex REST API (`primary_topic` / `topics` for the subject tree, `referenced_works` for the backward pass, `filter=cites:` for the forward pass). Backward/forward snowballing follows Wohlin (2014), "Guidelines for snowballing in systematic literature studies", EASE'14 |
+| `scripts/term_gate.py` | relevance measurement against the round-1 corpus, query anchoring, the round-2 candidate table | vocabulary overlap with a five-character prefix fold, so that morphological variants count as one term. No external code |
+| `scripts/paper_review.py` | the round-4 reading pack and the verdict ingest | no external code |
+| `scripts/llm.py` | optional LLM client for the three decision points (round 1 terms, round 2 queries, round 4 labels) | any OpenAI-compatible `/v1` endpoint. Configuration is read from the environment and never written to this repository |
+
+The one measurement worth naming explicitly: an earlier revision of this
+skill dropped papers whose coverage fell below a fixed threshold. That
+threshold was removed on 2026-10-21 — see the maintenance notes below.
+
 ## 5. Maintenance notes
 
 - Site selectors were verified live on **2026-09-30** against IEEE Xplore,
@@ -139,3 +157,30 @@ author and license in this section before publishing — the MIT license in
   filtered, so it is better suited to DOI enrichment than to discovery.
 - Each adapter records its verification date in its module docstring, so a
   failure can be traced to a dated check instead of guesswork.
+- The **multi-round loop** was verified live on **2026-10-22** against
+  `api.openalex.org`: round 1 and round 2 searches, the subject-taxonomy pass
+  (45/45 records resolved, 22 adjacent domains), the round-3 snowball
+  (117 references resolved, 60 kept backward, 27 forward), and the round-4
+  review over a 191-paper corpus.
+- The **IEEE Xplore adapter** was re-verified live on **2026-10-22** against
+  the live Angular front-end. Three extraction bugs were fixed against it:
+  author keywords live on the separate route `/document/<arnumber>/keywords`
+  (the document page carries only a tab link); the citation count is the
+  `.document-banner-metric-count` inside the `button.document-banner-metric`
+  whose text says "Cites in Papers" (the previous selector matched the whole
+  metrics container and returned `"View Document 68FullText ViewsAlerts…"`);
+  and the clean abstract text is in `.abstract-text-content`, not
+  `.abstract-text`, which also carries the "Abstract:" label.
+- **Threshold-based filtering was removed on 2026-10-21.** A fixed coverage
+  threshold was deciding relevance, and it was wrong in both directions: it
+  discarded papers whose vocabulary differed only in morphology, and it hid
+  references the reviewer wanted to see. Nothing is dropped automatically any
+  more; the measurement is written to `metadata/relevance_scores.csv` and the
+  reviewer decides. The measured cost of that decision: on one run the terms
+  the reviewer chose gave 53–73 % directly relevant results, the terms the
+  script mined on its own 20–27 %.
+- **Round 3 is not free.** On the same run the citation snowball produced 86
+  records of which 7 % were directly relevant, and it amplified the drift of
+  round 2 (a round-1 hit about dairy-cow yield prediction brought in a
+  bibliography of livestock science and urban building energy). It is
+  therefore off by default in the recommended flow.

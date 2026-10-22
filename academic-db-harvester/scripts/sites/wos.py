@@ -18,6 +18,10 @@ import re
 
 from sites.base import BaseSiteAdapter
 
+# A keyword that already carries a WoS field prefix must not be wrapped
+# again: 'TS=(""a" AND "b"")' is a syntax error, not a search.
+FIELDED = re.compile(r"\b(TS|PY|TI|AU|AB|ALL|KEY|DOCUT|WC|PU|IS)=\s*\(", re.I)
+
 
 class WOSSite(BaseSiteAdapter):
     name = "wos"
@@ -39,10 +43,21 @@ class WOSSite(BaseSiteAdapter):
 
     @staticmethod
     def _build_query(keyword: str, years: str) -> str:
-        query = f'TS=("{keyword}")'
+        keyword = (keyword or "").strip()
+        if FIELDED.search(keyword):
+            query = keyword                       # already a WoS expression
+        elif " AND " in keyword:
+            # '"a" AND "b"' -> TS=("a") AND TS=("b")
+            parts = [p.strip().strip('"').strip() for p in keyword.split(" AND ")]
+            query = " AND ".join('TS=("%s")' % p for p in parts if p)
+        else:
+            query = f'TS=("{keyword}")'
         year_start, _, year_end = (years or "").partition("-")
         year_start = year_start.strip()
-        if year_start.isdigit():
+        # Do not stack a second year filter onto a query that already carries
+        # one: 'PY=(2024-2026) AND PY=(2020-2026)' is contradictory, not
+        # stricter, and returns nothing.
+        if year_start.isdigit() and not re.search(r"\bPY=", keyword, re.I):
             query += f" AND PY=({year_start}-{(year_end or year_start).strip()})"
         return query
 
@@ -76,7 +91,7 @@ class WOSSite(BaseSiteAdapter):
 
         self._eval(r"""
         () => {
-            const sels = ['button[data-ta="search-button"]'];
+            const sels = ['button[data-ta="run-search"]', 'button[data-ta="search-button"]'];
             for (const s of sels) {
                 const el = document.querySelector(s);
                 if (el && el.offsetParent !== null) { el.click(); return true; }

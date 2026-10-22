@@ -3,10 +3,17 @@
 An [OpenCode](https://opencode.ai) / Agent Skills skill that harvests academic
 literature from **IEEE Xplore**, **ScienceDirect (Elsevier)** and **Web of
 Science** by driving an already-logged-in Edge browser over the Chrome DevTools
-Protocol. No API keys, no Zotero, everything stays on your machine.
+Protocol, plus **OpenAlex** and **arXiv** over plain HTTPS. No API keys, no
+Zotero, everything stays on your machine.
+
+It also runs a **goal-driven multi-round retrieval** loop: give it a research
+goal rather than a keyword, and it expands the goal into seed queries, mines
+the adjacent field's own terminology, follows the citation graph, and then
+produces a corpus that has been reviewed paper by paper.
 
 > 中文：本仓库是一个 Agent Skill，通过 CDP 复用你已登录的 Edge 浏览器，在三大数据库检索、
 > 抽取题录、按需下载 PDF 并生成 CSV/JSON/HTML 报告。全部本地运行。
+> 另支持「多轮检索」：给出研究目标而非单个关键词，自动扩展为多轮检索并对全量文献逐篇复核。
 
 ---
 
@@ -100,22 +107,98 @@ python academic-db-harvester/scripts/harvester.py --source wos \
 | `--source` | str | `ieee` | `ieee` / `sciencedirect` / `wos` / `openalex` / `arxiv` |
 | `--keyword` | str | required | Search terms (quote multi-word phrases) |
 | `--years` | str | `2020-2025` | Year range |
-| `--count` | int | `50` | Max papers |
+| `--count` | int | `50` | Max papers per query |
 | `--sort` | str | `relevance` | `relevance` / `newest` / `oldest` / `cited` |
 | `--download-pdf` | flag | off | Download full text (full-text sources only) |
 | `--min-if` | float | `0` | Impact-factor filter (IEEE; needs the EasyScholar extension) |
 | `--output` | path | `~/Desktop/论文/…` | Output root |
 | `--cdp-port` | int | `9222` | Edge remote-debugging port |
+| `--multi-round` | flag | off | Run the goal-driven multi-round loop (below) |
+| `--goal` | str | — | Research goal in free text; round 1 decomposes it into seed queries |
+| `--terms-file` | path | — | Round-1 seed terms, one per line; the bridge when the goal is in a language the index does not understand |
+| `--rounds` | str | `2,3,4` | Which rounds follow round 1 (round 1 always runs) |
+| `--per-round` | int | `3` | Max queries per round |
+| `--review` | str | `annotate` | `off` / `annotate` (measure, keep everything) / `gate` (also pause for the review) |
+| `--approve` | path | — | Reviewer-edited query table to execute |
+| `--verdicts` | path | — | Round-4 verdict JSON |
+| `--resume` | path | — | Continue a paused run from the corpus on disk |
+| `--llm` | flag | off | Let an LLM make the three decisions in one run (needs `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`) |
+
+## Multi-round retrieval
+
+One keyword is a guess. `--multi-round` turns a research **goal** into four
+progressively wider sweeps, and then a pass that checks whether the result is
+any good.
+
+```
+                    goal (any language)
+                          │
+       ┌──────────────────┴──────────────────┐
+       │ R1  seed queries                    │  goal → 2-3-gram search strings
+       │ R2  adjacent fields + the field's   │  co-word/PRF over author keywords
+       │     own professional vocabulary      │  + OpenAlex subject taxonomy
+       │ R3  citation snowball (optional)    │  backward references + forward citations
+       │ R4  corpus review                    │  every paper labelled by the reviewer
+       └──────────────────┬──────────────────┘
+                          ▼
+              selection + per-query precision table
+```
+
+**The script never decides anything.** The agent running the skill makes three
+judgement calls; everything else is mechanical and reported.
+
+| # | Decision | How |
+|---|----------|-----|
+| 1 | goal → English search terms | the agent writes the field's own vocabulary — a script cannot translate a Chinese goal into "orchestration" |
+| 2 | which expansion queries to run | the agent reads `term_review_round2.md` (candidate terms plus the adjacent domains and *their* keywords) and flips `approved` |
+| 3 | which papers belong in the result | the agent reads `paper_review.md` in batches and labels every paper |
+
+```bash
+# 1) R1, then pause with the round-2 candidate table
+python academic-db-harvester/scripts/harvester.py --source openalex --multi-round \
+  --goal "cyber range orchestration" --terms-file terms.txt --review gate -o OUT
+
+# 2) the agent edits OUT/<run>/reports/term_review_round2.json
+
+# 3) R2 → R4, then pause with the reading pack
+python academic-db-harvester/scripts/harvester.py --source openalex --multi-round \
+  --goal "cyber range orchestration" --terms-file terms.txt \
+  --approve OUT/<run>/reports/term_review_round2.json --resume OUT/<run> -o OUT2
+
+# 4) the agent labels every paper in OUT2/<run>/reports/paper_review.json
+
+# 5) ingest the verdicts - nothing is re-searched
+python academic-db-harvester/scripts/harvester.py --source openalex --multi-round \
+  --goal "cyber range orchestration" --resume OUT2/<run> \
+  --verdicts OUT2/<run>/reports/paper_review.json --rounds 4 -o OUT2/<run>
+```
+
+`--resume` loads the corpus from disk, so a paused run never pays twice for
+the rounds it already completed. With `--llm` and an OpenAI-compatible
+endpoint configured, the same three decisions are made by an LLM inside a
+single run and the file-shuttling above disappears.
+
+Round 3 is **not** in the recommended flow: on the run that produced the
+numbers in `RELEASE_NOTES.md` it returned 86 records of which 7 % were
+directly relevant, and it amplified the drift of round 2.
 
 ## Output
 
 ```
 {timestamp}_{keyword}[_{source}]/
   metadata/     candidates.json|csv, priority tiers, references.bib
+                provenance.csv        (multi-round) which round, which query
+                relevance_scores.csv  (multi-round) coverage per paper
+                ai_review.csv         (multi-round) the reviewer's verdict
+                selected_papers.json|csv  (multi-round) the selection
   pdfs/         001_{title}_{arnumber|pii|uid}.pdf, download_log.json
   citations/    per-paper .bib / .ris, all_references.bib
   abstracts/    per-paper .txt, all_abstracts.txt
   reports/      summary.html, statistics.json, search_log.txt
+                query_plan.json|md            (multi-round) the reproducible plan
+                term_review_round2.json|md    (multi-round) round-2 candidates
+                paper_review.json|md          (multi-round) the reading pack
+                round4_review_stats.json|md   (multi-round) precision per query
   urls.csv      paper links
   pending.csv   failures / paywalled items
   config.json   run parameters

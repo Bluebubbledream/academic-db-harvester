@@ -41,6 +41,10 @@ class IEEESite(BaseSiteAdapter):
     def extract_detail(self):
         return self.impl.extract_detail()
 
+    def extract_keywords(self):
+        """Author keywords live on the /document/<id>/keywords route."""
+        return self.impl.extract_keywords()
+
     def check_login_status(self):
         return self.impl.check_login_status()
 

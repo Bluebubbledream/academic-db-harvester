@@ -302,14 +302,23 @@ class IEEEXploreAutomation:
             };
             var titleEl = document.querySelector('h1.document-title span, h1, .document-title-text, [class*="document-title"] h1');
             result.title = titleEl ? titleEl.textContent.trim() : getMeta('citation_title');
-            var absSels = ['div.abstract-text div', '.abstract-text', 'xpl-abstract-view div', '[class*="abstract"] div', '.document-abstract', 'div.abstract'];
+            // '.abstract-text-content' holds the clean text; the '.abstract-text'
+            // wrapper also carries the "Abstract:" label.
+            var absSels = ['span.abstract-text-content', 'div.abstract-text-content',
+                           '.abstract-text div', 'xpl-abstract-view div',
+                           '.document-abstract', 'div.abstract-text'];
             var absEl = null;
             for (var i = 0; i < absSels.length; i++) {
                 try { absEl = document.querySelector(absSels[i]); if (absEl && absEl.textContent.trim().length > 20) break; } catch(e) {}
             }
-            result.abstract = absEl ? absEl.textContent.trim() : '';
-            var kwEls = document.querySelectorAll('xpl-keywords-item a, .doc-keywords-list a, ul.keywords a, [class*="keyword"] a');
-            result.keywords = Array.from(kwEls).map(function(el) { return el.textContent.trim(); }).filter(function(s) { return s; });
+            result.abstract = absEl ? absEl.textContent.trim().replace(/^\s*abstract\s*[:\-–—]?\s*/i, '') : '';
+            var kwEls = document.querySelectorAll('xpl-keywords-item a, .doc-keywords-list a, a.stats-keywords-list-item, ul.keywords a, [class*="keyword"] a');
+            var kws = [];
+            Array.prototype.forEach.call(kwEls, function(el) {
+                var s = (el.textContent || '').replace(/[,;]\s*$/, '').trim();
+                if (s && s.length < 90 && kws.indexOf(s) < 0) kws.push(s);
+            });
+            result.keywords = kws;
             var authorMetas = document.querySelectorAll('meta[name="citation_author"]');
             if (authorMetas.length) {
                 result.authors = Array.from(authorMetas).map(function(m) { return m.content.trim(); });
@@ -330,8 +339,31 @@ class IEEEXploreAutomation:
                 var pubEl = document.querySelector('.publisher-info-container, .publication-title, [class*="publication"]');
                 result.journal = pubEl ? pubEl.textContent.trim() : '';
             }
-            var citeEl = document.querySelector('.document-ft-metrics-bar span, .citation-count, [class*="citation"] span, [class*="metrics"]');
-            result.citation_count = citeEl ? citeEl.textContent.trim() : '0';
+            // The citation count lives in the banner metrics: a
+            // button.document-banner-metric whose text says "Cites in Papers",
+            // with the number in a nested/sibling .document-banner-metric-count.
+            // The old selector matched the whole metrics container and
+            // returned "View Document 68FullText ViewsAlerts...".
+            var citeEl = null;
+            var citeBtns = document.querySelectorAll('button.document-banner-metric, a.document-banner-metric');
+            for (var ci = 0; ci < citeBtns.length && !citeEl; ci++) {
+                var b = citeBtns[ci];
+                if (!/cites/i.test(b.textContent || '')) continue;
+                var c = b.querySelector('.document-banner-metric-count');
+                if (!c) {
+                    var sib = b.nextElementSibling;
+                    if (sib && String(sib.className || '').indexOf('document-banner-metric-count') >= 0) c = sib;
+                }
+                if (c) citeEl = c;
+            }
+            if (!citeEl) {
+                var numOnly = document.querySelectorAll('.document-banner-metric-count');
+                for (var ni = 0; ni < numOnly.length; ni++) {
+                    var t = (numOnly[ni].textContent || '').trim();
+                    if (/^\d[\d,]*$/.test(t)) { citeEl = numOnly[ni]; break; }
+                }
+            }
+            result.citation_count = citeEl ? (citeEl.textContent || '').replace(/[^0-9]/g, '') : '0';
             var oaEl = document.querySelector('.open-access-badge, [class*="open-access"], [class*="OpenAccess"]');
             result.access_status = oaEl ? 'Open Access' : 'Subscription';
             var pdfLinks = [];
@@ -359,6 +391,41 @@ class IEEEXploreAutomation:
             return {}
 
     # Login check
+
+    def extract_keywords(self) -> list[str]:
+        """Author keywords live on their own route, not on the document page.
+
+        IEEE Xplore's current site is an Angular application: the document
+        page carries only a *tab link* to /document/<arnumber>/keywords, and
+        the term list itself is rendered there. Without this, every record
+        comes back with an empty keyword list and the round-2 co-word mining
+        has nothing to mine.
+        """
+        url = self.page.url
+        m = re.search(r"/document/(\d+)", url)
+        if not m:
+            return []
+        base = url.split("/document/")[0]
+        kw_url = "%s/document/%s/keywords" % (base, m.group(1))
+        try:
+            self.page.goto(kw_url, wait_until="domcontentloaded", timeout=60000)
+            self.page.wait_for_timeout(2500)
+            kws = self.page.evaluate("""() => {
+                const out = [];
+                // Prefer the anchor: the <li> wrapper carries IEEE's trailing
+                // separator ("Translation ,") while the anchor holds the term.
+                let els = document.querySelectorAll('a.stats-keywords-list-item');
+                if (!els.length) els = document.querySelectorAll('ul.doc-keywords-list li');
+                Array.prototype.forEach.call(els, function(el) {
+                    const s = (el.textContent || '').replace(/[,;]\\s*$/, '').trim();
+                    if (s && s.length < 90 && out.indexOf(s) < 0) out.push(s);
+                });
+                return out;
+            }""")
+        except Exception as exc:
+            logger.debug("keywords fetch failed for %s: %s", kw_url, exc)
+            return []
+        return [k for k in (kws or []) if k]
 
     def check_login_status(self) -> bool:
         """Verify that the user is logged in to IEEE Xplore."""

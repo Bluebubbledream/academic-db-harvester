@@ -18,6 +18,7 @@ Docs: https://info.arxiv.org/help/api/user-manual.html
 """
 
 import os
+import re
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -29,6 +30,12 @@ ARXIV = "{http://arxiv.org/schemas/atom}"
 OPENSEARCH = "{http://a9.com/-/spec/opensearch/1.1/}"
 
 _last_request = [0.0]
+
+# A keyword that already carries field prefixes or boolean syntax - which is
+# what the multi-round planner produces when it anchors an expansion query -
+# must not be wrapped a second time. 'all:"all:"x" AND all:"y""' is malformed
+# and silently returns nothing, which is worse than a visible error.
+FIELDED = re.compile(r"\b(all|ti|abs|au|co|jr|cat|rn|id|ms|ac|cc):", re.I)
 
 
 class ArxivSite(ApiSiteAdapter):
@@ -64,7 +71,11 @@ class ArxivSite(ApiSiteAdapter):
     def build_search_url(self, keyword: str, years: str = "", sort: str = "relevance",
                          page: int = 1) -> str:
         start, end = self.parse_years(years)
-        query = 'all:"%s"' % keyword.replace('"', " ")
+        keyword = (keyword or "").strip()
+        if FIELDED.search(keyword) or " AND " in keyword or " OR " in keyword:
+            query = keyword                      # already a formed query
+        else:
+            query = 'all:"%s"' % keyword.replace('"', " ")
         if start:
             query += " AND submittedDate:[%d0101 TO %d1231]" % (start, end or start)
         url = ("%s?search_query=%s&start=%d&max_results=%d"
