@@ -43,25 +43,69 @@ through the pipeline.
 
 ## Install
 
-Clone, then copy the skill folder into any of the locations OpenCode scans:
+**This repository is the single source of truth.** Clone it, run the install
+script, and edit the skill *here* — never in the installed copy.
 
-Download or clone this repository, then copy the `academic-db-harvester/`
-folder into any of the locations OpenCode scans — pick one:
-
-```powershell
-# from the cloned repository root
-Copy-Item -Recurse .\academic-db-harvester "$HOME\.config\opencode\skills\"  # user-global
-Copy-Item -Recurse .\academic-db-harvester .opencode\skills\                # per project
-Copy-Item -Recurse .\academic-db-harvester .claude\skills\                 # Claude-compatible loaders
-Copy-Item -Recurse .\academic-db-harvester .agents\skills\                 # agent-compatible loaders
+```bash
+git clone git@github.com:Bluebubbledream/academic-db-harvester.git
+cd academic-db-harvester
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The folder name must stay `academic-db-harvester` — the skill name in
-`SKILL.md` has to match the directory that contains it.
+`install.ps1` mirrors `academic-db-harvester/` into a skills directory. The
+default is `$HOME\.agents\skills`; point it elsewhere with `-Target`:
+
+```powershell
+# user-global
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 `
+  -Target "$HOME\.config\opencode\skills"
+
+# per project
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 `
+  -Target "D:\project\.opencode\skills"
+```
+
+The mirror is one-way and total: files removed from the source are removed
+from the installed copy, so the two never drift. `__pycache__` is never
+copied, and the script fails loudly if the installed copy has no `SKILL.md`
+or if the skill name stops matching the folder name.
 
 Discoverable skill locations (OpenCode docs): `.opencode/skills/<name>/`,
 `~/.config/opencode/skills/<name>/`, `.claude/skills/<name>/`,
-`.agents/skills/<name>/` and their user-global equivalents.
+`.agents/skills/<name>/` and their user-global equivalents. The folder name
+must stay `academic-db-harvester` — the skill name in `SKILL.md` has to match
+the directory that contains it.
+
+## Developing
+
+```
+<this repo>                     the only place to edit
+   └── academic-db-harvester/   the skill
+        ├── SKILL.md            the contract: what the agent may do, and how
+        └── scripts/            the implementation
+```
+
+1. Edit the skill **in this repository**.
+2. `powershell -ExecutionPolicy Bypass -File .\install.ps1` to push it into
+   the agent's skills directory.
+3. Run the skill and check the output.
+4. Commit and push.
+
+The installed copy under `~/.agents/skills/` is generated output — treat it
+like `__pycache__` and never hand-edit it. The next `install.ps1` run
+discards any manual change made there.
+
+Two things worth knowing before you change the code:
+
+- **The script never decides anything.** Relevance, which expansion queries to
+  run and which papers belong in the result are the reviewer's calls; the
+  harvester mines candidates, writes the tables and reports what it did. A
+  fixed threshold used to make those calls and it was wrong in both
+  directions — see `RELEASE_NOTES.md` v1.1.0.
+- **The browser adapters are the fragile part.** Publisher front-ends change;
+  when extraction degrades, re-verify the selectors listed in
+  `academic-db-harvester/references/cdp_reference.md` and record the date you
+  checked in `CREDITS.md` §5.
 
 | Platform | Role | Transport | PDF |
 |---|---|---|---|
